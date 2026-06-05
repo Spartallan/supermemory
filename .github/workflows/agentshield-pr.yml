@@ -1,0 +1,57 @@
+# /commit pipeline — authoritative CI gate (Spartallan org)
+#
+# Runs on every PR. The job named "AgentShield" below is what branch
+# protection requires as a status check, so its pass/fail is what GitHub
+# native auto-merge waits on. CodeRabbit (GitHub App) posts its own
+# "CodeRabbit" check separately; the installer adds that to the required
+# checks too when the App is present.
+#
+# Pinned to the full commit SHA the official v1 tag points to (smoke-tested
+# working). NOTE: the v1.4.0 tag commit (9bbc007) ships a BROKEN dist
+# (missing 'yaml' dep) and the repo README documents inputs (sarif, baseline,
+# supply-chain) that the released action does NOT yet support — only
+# path / min-severity / fail-on-findings / format(terminal|json|markdown).
+# Bump deliberately and re-smoke-test; Dependabot can automate digest bumps.
+
+name: commit-pipeline
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+# Least-privilege: the scan only reads the checkout and writes annotations /
+# job summary (no permission needed for those). No pull-requests:write, so a
+# compromised action couldn't dismiss the CodeRabbit review.
+permissions:
+  contents: read
+
+concurrency:
+  group: commit-pipeline-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  agentshield:
+    name: AgentShield           # <-- required status check context. Do not rename
+                                 #     without updating branch protection.
+    runs-on: ubuntu-latest
+    # Skip draft PRs so auto-merge isn't gated on configs you're still editing.
+    if: github.event.pull_request.draft == false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: AgentShield security scan
+        id: scan
+        uses: affaan-m/agentshield@0b5e1bc95a712285d6bf6289f67d6694de4cf8ef  # v1 release tag
+        with:
+          path: "."
+          # Block on anything high or worse. Lower to "medium" to be stricter.
+          min-severity: "high"
+          fail-on-findings: "true"
+
+      # Make the grade/score visible in the checks UI even on success.
+      - name: Report
+        if: always()
+        run: |
+          echo "AgentShield score: ${{ steps.scan.outputs.score }} / 100 (grade ${{ steps.scan.outputs.grade }})"
+          echo "Findings: ${{ steps.scan.outputs.total-findings }} (critical: ${{ steps.scan.outputs.critical-count }})"
